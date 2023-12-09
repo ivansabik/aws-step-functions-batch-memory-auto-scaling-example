@@ -1,0 +1,79 @@
+service: memory-autoscaling-example
+
+provider:
+  name: aws
+  runtime: python3.10
+
+stepFunctions:
+  stateMachines:
+    BatchJobRunner:
+      events: ${file(./jobs.yml):jobs}
+      definition:
+        Comment: Step machine to orchestrate Batch jobs with memory auto-scaling
+        StartAt: Submit Batch Job And Wait For Completion
+        States:
+          Submit Batch Job And Wait For Completion:
+            Type: Task
+            Resource: arn:aws:states:::batch:submitJob.sync
+            Parameters:
+              ContainerOverrides:
+                ResourceRequirements:
+                  - Type: VCPU
+                    Value.$: $.job_vcpus
+                  - Type: MEMORY
+                    Value.$: $.job_memory
+                Command.$: $.job_command
+              JobName.$: $.job_name
+              JobDefinition: !Select [1 , !Split ["/", !Select [5, !Split [":", !Ref BatchJobDefinition]]]]
+              JobQueue: !Select [1 , !Split ["/", !Select [5, !Split [":", !Ref BatchJobQueue]]]]
+              PropagateTags: true
+            Catch:
+              - ErrorEquals:
+                  - States.ALL
+                Next: Process Failed Job
+                ResultPath: $.job_error
+            Next: Job Succeeded
+            ResultPath: $.job_original_parameters
+          Job Succeeded:
+            Type: Succeed
+          Process Failed Job:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters:
+              Payload.$: $
+              FunctionName:
+                Fn::GetAtt: [processFailedBatchJob, Arn]
+            Retry:
+              - ErrorEquals:
+                  - Lambda.ServiceException
+                  - Lambda.AWSLambdaException
+                  - Lambda.SdkClientException
+                  - Lambda.TooManyRequestsException
+                IntervalSeconds: 1
+                MaxAttempts: 3
+                BackoffRate: 2
+            Next: Retry Batch Job With More Memory?
+            ResultPath: $.retry_job_parameters
+          Retry Batch Job With More Memory?:
+            Type: Choice
+            Choices:
+              - Variable: $.retry_job_parameters.Payload.retry_job
+                BooleanEquals: true
+                Next: Submit Batch Job And Wait For Completion
+            Default: Job Failed
+            OutputPath: $.retry_job_parameters.Payload.retry_job_specifications
+          Job Failed:
+            Type: Fail
+            Cause: AWS Batch Job Failed
+            Error: DescribeJob returned FAILED
+      dependsOn: StepFunctionsRole
+  validate: true
+
+functions:
+  processFailedBatchJob:
+    handler: lambdas.process_failed_job.handler
+
+plugins:
+  - serverless-step-functions
+
+resources: ${file(./resources.yml)}

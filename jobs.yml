@@ -1,0 +1,15 @@
+jobs:
+  - schedule:
+      rate: rate(12 hours)
+      input:
+        job_name: hallo
+        job_vcpus: "0.5"
+        job_memory: "512"
+        job_command: ["echo", "howdy"]
+  - schedule:
+      rate: cron(0 * * * ? *)
+      input:
+        job_name: hola
+        job_vcpus: "0.25"
+        job_memory: "512"
+        job_command: ["echo", "hola"]

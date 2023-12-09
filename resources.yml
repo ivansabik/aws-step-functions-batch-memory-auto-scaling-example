@@ -1,0 +1,97 @@
+  Resources:
+    StepFunctionsRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: states.amazonaws.com
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: delivery
+            PolicyDocument:
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - batch:SubmitJob
+                    - batch:DescribeJobs
+                    - batch:TerminateJob
+                  Resource: "*"
+                - Effect: Allow
+                  Action:
+                    - events:PutTargets
+                    - events:PutRule
+                    - events:DescribeRule
+                  Resource: "*"
+                - Effect: Allow
+                  Action:
+                    - lambda:InvokeFunction
+                  Resource: "*"
+                - Effect: Allow
+                  Action:
+                    - xray:PutTraceSegments
+                    - xray:PutTelemetryRecords
+                    - xray:GetSamplingRules
+                    - xray:GetSamplingTargetsss
+                  Resource: "*"
+
+    BatchComputeEnvironment:
+        Type: AWS::Batch::ComputeEnvironment
+        Properties:
+            ComputeEnvironmentName: memory-autoscaling-example
+            Type: MANAGED
+            State: ENABLED
+            ServiceRole: !Sub "arn:aws:iam::${AWS::AccountId}:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch"
+            ComputeResources: 
+                Type: FARGATE_SPOT
+                MaxvCpus: 20
+                Subnets: 
+                  - ${param:subnet_id}
+                SecurityGroupIds: 
+                  - ${param:security_group_id}
+    BatchJobQueue:
+        Type: AWS::Batch::JobQueue
+        Properties:
+            ComputeEnvironmentOrder: 
+              - 
+                ComputeEnvironment: !Ref BatchComputeEnvironment
+                Order: 1
+            Priority: 1
+            State: ENABLED
+            JobQueueName: memory-autoscaling-example
+
+    BatchJobDefinition:
+        Type: AWS::Batch::JobDefinition
+        Properties:
+            JobDefinitionName: memory-autoscaling-example
+            Type: container
+            Parameters: {}
+            # Retry up to 3 times when spot instances are reclaimed
+            RetryStrategy:
+              Attempts: 3
+              EvaluateOnExit:
+              - Action: RETRY
+                OnStatusReason: "Host EC2*"
+              - Action: EXIT
+                OnReason: "*"
+            PlatformCapabilities:
+              - FARGATE
+            ContainerProperties: 
+                Command: 
+                  - "echo"
+                  - "hallo"
+                JobRoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole"
+                Image: public.ecr.aws/docker/library/alpine:latest
+                ExecutionRoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole"
+                ResourceRequirements:
+                  -
+                    Type: VCPU
+                    Value: 0.25
+                  -
+                    Type: MEMORY
+                    Value: 512
+                FargatePlatformConfiguration:
+                  PlatformVersion: LATEST
+                NetworkConfiguration:
+                  AssignPublicIp: ENABLED
